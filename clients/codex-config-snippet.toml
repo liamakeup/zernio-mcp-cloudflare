@@ -1,7 +1,7 @@
 # Add to ~/.codex/config.toml
 
 [mcp_servers.zernio]
-url = "https://api.zernio-mcp.workers.dev/mcp"
+url = "https://api.zerniomcp.workers.dev/mcp"
 enabled = true
 startup_timeout_sec = 10
 tool_timeout_sec = 120

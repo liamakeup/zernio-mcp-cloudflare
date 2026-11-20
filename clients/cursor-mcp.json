@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "zernio": {
-      "url": "https://api.zernio-mcp.workers.dev/mcp"
+      "url": "https://api.zerniomcp.workers.dev/mcp"
     }
   }
 }

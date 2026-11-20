@@ -3,8 +3,8 @@
 > **Cloudflare Workers MCP Server & Gateway cho Zernio Unified Social Media API**  
 > Tuân thủ chuẩn **Model Context Protocol (MCP)** mới nhất (**Streamable HTTP**, JSON-RPC 2.0) và tương thích **100% Cloudflare Free Tier** (hoàn toàn miễn phí, 0 chi phí duy trì).
 
-- **Production Endpoint**: `https://api.zernio-mcp.workers.dev/mcp`
-- **Health Check**: `https://api.zernio-mcp.workers.dev/health`
+- **Production Endpoint**: `https://api.zerniomcp.workers.dev/mcp`
+- **Health Check**: `https://api.zerniomcp.workers.dev/health`
 
 ---
 
@@ -19,7 +19,7 @@
   - **Không dùng Durable Objects** (không phát sinh phí $5/tháng của Workers Paid).
   - Tận dụng hạn mức **100.000 requests/ngày** miễn phí vĩnh viễn của Cloudflare.
   - CPU execution time siêu thấp (~1-2ms, giới hạn Free Tier là 10ms).
-  - Subdomain chuẩn: `api.zernio-mcp.workers.dev`.
+  - Subdomain chuẩn: `api.zerniomcp.workers.dev`.
 - **Linh hoạt xác thực**:
   - Hỗ trợ header `x-api-key` (tương thích cấu hình của mrgoonie/zernio-mcp và Claude Desktop / Cursor).
   - Hỗ trợ header chuẩn `Authorization: Bearer <sk_key>`.
@@ -34,7 +34,7 @@
 [Agentic AI Clients]
   (agy, Claude Code, Codex, Cursor, n8n, Python agents)
          │
-         ▼  POST https://api.zernio-mcp.workers.dev/mcp
+         ▼  POST https://api.zerniomcp.workers.dev/mcp
 ┌─────────────────────────────────────────────────────────┐
 │ Cloudflare Workers Edge (100% Free Tier)                │
 │                                                         │
@@ -71,11 +71,11 @@ npm run deploy
 ```
 
 Endpoint hoạt động:
-`https://api.zernio-mcp.workers.dev/mcp`
+`https://api.zerniomcp.workers.dev/mcp`
 
 Kiểm tra:
 ```bash
-curl https://api.zernio-mcp.workers.dev/health
+curl https://api.zerniomcp.workers.dev/health
 ```
 
 ---
@@ -85,20 +85,20 @@ curl https://api.zernio-mcp.workers.dev/health
 ### 1. Antigravity (`agy`)
 
 ```bash
-agy mcp add zernio https://api.zernio-mcp.workers.dev/mcp
+agy mcp add zernio https://api.zerniomcp.workers.dev/mcp
 ```
 
 ### 2. Claude Code
 
 ```bash
-claude mcp add --transport http zernio https://api.zernio-mcp.workers.dev/mcp
+claude mcp add --transport http zernio https://api.zerniomcp.workers.dev/mcp
 ```
 
 ### 3. OpenAI Codex (`~/.codex/config.toml`)
 
 ```toml
 [mcp_servers.zernio]
-url = "https://api.zernio-mcp.workers.dev/mcp"
+url = "https://api.zerniomcp.workers.dev/mcp"
 enabled = true
 startup_timeout_sec = 10
 tool_timeout_sec = 120
@@ -110,7 +110,7 @@ tool_timeout_sec = 120
 {
   "mcpServers": {
     "zernio": {
-      "url": "https://api.zernio-mcp.workers.dev/mcp"
+      "url": "https://api.zerniomcp.workers.dev/mcp"
     }
   }
 }

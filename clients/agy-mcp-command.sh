@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Connect Antigravity (agy) to your Cloudflare Zernio MCP Server
 
-WORKER_URL="https://api.zernio-mcp.workers.dev/mcp"
+WORKER_URL="https://api.zerniomcp.workers.dev/mcp"
 
 # If public or server-configured ZERNIO_API_KEY:
 agy mcp add zernio "$WORKER_URL"
