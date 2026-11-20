@@ -5,5 +5,5 @@ set -euo pipefail
 : "${GATEWAY_TOKEN:?set GATEWAY_TOKEN first}"
 
 claude mcp remove zernio >/dev/null 2>&1 || true
-claude mcp add --transport http zernio https://api.zerniomcp.workers.dev/mcp \
+claude mcp add --transport http zernio https://api.liamakeup.workers.dev/mcp \
   -H "x-gateway-token: ${GATEWAY_TOKEN}"

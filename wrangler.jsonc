@@ -1,11 +1,11 @@
 /**
  * Cloudflare Workers configuration for zernio-mcp-cloudflare
- * URL: https://api.zerniomcp.workers.dev/mcp
+ * URL: https://api.liamakeup.workers.dev/mcp
  * 100% compatible with Cloudflare Workers Free Tier:
  * - Pure stateless Worker (fetch handler)
  * - Zero Durable Objects
  * - Zero paid bindings
- * - Subdomain: api.zerniomcp.workers.dev
+ * - Subdomain: api.liamakeup.workers.dev
  */
 {
   "$schema": "node_modules/wrangler/config-schema.json",

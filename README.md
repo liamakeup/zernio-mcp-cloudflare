@@ -4,8 +4,8 @@ Streamable HTTP proxy in front of the [Zernio](https://zernio.com/agents) MCP se
 stateless Cloudflare Worker. One endpoint for every agent (Antigravity, Claude Code, Codex, Cursor,
 n8n…), with the Zernio API key kept as a Worker secret instead of in each client's config.
 
-- Endpoint: `https://api.zerniomcp.workers.dev/mcp`
-- Health: `https://api.zerniomcp.workers.dev/health`
+- Endpoint: `https://api.liamakeup.workers.dev/mcp`
+- Health: `https://api.liamakeup.workers.dev/health`
 
 ## Cloudflare Free plan
 
@@ -44,7 +44,7 @@ npm install
 npx wrangler secret put ZERNIO_API_KEY
 openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' | npx wrangler secret put GATEWAY_TOKEN
 npm run deploy
-curl https://api.zerniomcp.workers.dev/health   # requiresGatewayToken: true
+curl https://api.liamakeup.workers.dev/health   # requiresGatewayToken: true
 ```
 
 ## Connect agents
@@ -53,22 +53,22 @@ Replace `<GATEWAY_TOKEN>` with the value you stored. Ready-made snippets are in 
 
 ```bash
 # Antigravity
-agy mcp add --header "x-gateway-token: <GATEWAY_TOKEN>" zernio https://api.zerniomcp.workers.dev/mcp
+agy mcp add --header "x-gateway-token: <GATEWAY_TOKEN>" zernio https://api.liamakeup.workers.dev/mcp
 
 # Claude Code
-claude mcp add --transport http zernio https://api.zerniomcp.workers.dev/mcp -H "x-gateway-token: <GATEWAY_TOKEN>"
+claude mcp add --transport http zernio https://api.liamakeup.workers.dev/mcp -H "x-gateway-token: <GATEWAY_TOKEN>"
 ```
 
 ```toml
 # Codex: ~/.codex/config.toml
 [mcp_servers.zernio]
-url = "https://api.zerniomcp.workers.dev/mcp"
+url = "https://api.liamakeup.workers.dev/mcp"
 http_headers = { "x-gateway-token" = "<GATEWAY_TOKEN>" }
 ```
 
 ```json
 // Cursor: .cursor/mcp.json (keep this file out of git)
-{ "mcpServers": { "zernio": { "url": "https://api.zerniomcp.workers.dev/mcp",
+{ "mcpServers": { "zernio": { "url": "https://api.liamakeup.workers.dev/mcp",
   "headers": { "x-gateway-token": "<GATEWAY_TOKEN>" } } } }
 ```
 
