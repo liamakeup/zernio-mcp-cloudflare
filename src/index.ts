@@ -2,14 +2,12 @@
  * zernio-mcp-cloudflare
  *
  * Model Context Protocol (MCP) Server & Gateway for Zernio Social Media API.
- * Reference: https://github.com/mrgoonie/zernio-mcp & https://zernio.com/agents
- *
  * - Modern MCP Standard: Streamable HTTP (spec 2024-11-05 / 2026 baseline), JSON-RPC 2.0.
  * - 100% Cloudflare Workers Free Tier Compatible:
  *   - Pure stateless Worker (fetch handler)
  *   - Zero Durable Objects (no paid add-on required)
  *   - Fast execution (<5ms CPU time)
- *   - Subdomain ready (*.workers.dev)
+ *   - Subdomain ready (*.zerniomcp.workers.dev)
  */
 
 export interface Env {
@@ -45,6 +43,7 @@ const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers":
     "Content-Type, x-api-key, x-gateway-token, Authorization, Mcp-Protocol-Version, Mcp-Method, Mcp-Name, mcp-session-id, X-Requested-With",
+  "Access-Control-Expose-Headers": "WWW-Authenticate, Mcp-Protocol-Version, Mcp-Session-Id",
   "Access-Control-Max-Age": "86400",
 };
 
@@ -99,7 +98,6 @@ export default {
       let clientGatewayToken = customGatewayHeader || queryToken;
       if (!clientGatewayToken && authHeader?.startsWith("Bearer ")) {
         const tokenCandidate = authHeader.substring(7).trim();
-        // If client passed a token that matches gateway token
         if (tokenCandidate === env.GATEWAY_TOKEN) {
           clientGatewayToken = tokenCandidate;
         }
@@ -120,11 +118,7 @@ export default {
       }
     }
 
-    // 5. Resolve Zernio API Key
-    // Priority:
-    // a) Client header: `x-api-key`
-    // b) Client header: `Authorization: Bearer <key>`
-    // c) Worker environment secret: `env.ZERNIO_API_KEY`
+    // 5. Resolve Zernio API Key or Token
     const clientXApiKey = request.headers.get("x-api-key");
     const clientAuth = request.headers.get("Authorization");
     const clientBearer = clientAuth?.startsWith("Bearer ")
@@ -177,9 +171,7 @@ async function handleJsonRpcRequest(
 
   // Notification (no id)
   if (method === "notifications/initialized") {
-    if (apiKey) {
-      forwardToUpstream(rpc, rawRequest, apiKey, env).catch(() => {});
-    }
+    forwardToUpstream(rpc, rawRequest, apiKey, env).catch(() => {});
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
@@ -216,33 +208,17 @@ async function handleJsonRpcRequest(
     });
   }
 
-  // For operational methods, verify API key
-  if (!apiKey) {
-    return jsonResponse(
-      {
-        jsonrpc: "2.0",
-        id,
-        error: {
-          code: -32600,
-          message:
-            "Missing Zernio API key. Provide via x-api-key header, Authorization: Bearer <key>, or configure ZERNIO_API_KEY secret on Cloudflare Worker.",
-        },
-      },
-      401
-    );
-  }
-
-  // Forward request to Upstream Zernio MCP Server
+  // Forward all tool/resource/prompt requests to Upstream Zernio MCP Server
   return await forwardToUpstream(rpc, rawRequest, apiKey, env);
 }
 
 /**
- * Forward JSON-RPC call to upstream Zernio MCP Server with streaming support
+ * Forward JSON-RPC call to upstream Zernio MCP Server with streaming & OAuth challenge passthrough
  */
 async function forwardToUpstream(
   rpc: any,
   rawRequest: Request,
-  apiKey: string,
+  apiKey: string | undefined,
   env: Env
 ): Promise<Response> {
   const upstreamUrl = env.UPSTREAM_MCP_URL || DEFAULT_UPSTREAM;
@@ -250,9 +226,18 @@ async function forwardToUpstream(
 
   upstreamHeaders.set("Content-Type", "application/json");
   upstreamHeaders.set("Accept", "application/json, text/event-stream");
-  upstreamHeaders.set("Authorization", `Bearer ${apiKey}`);
 
-  // Forward metadata headers if provided by agent client
+  if (apiKey) {
+    upstreamHeaders.set("Authorization", `Bearer ${apiKey}`);
+  } else {
+    // If client supplied any raw Authorization header, forward it
+    const clientAuth = rawRequest.headers.get("Authorization");
+    if (clientAuth) {
+      upstreamHeaders.set("Authorization", clientAuth);
+    }
+  }
+
+  // Forward MCP metadata headers if provided by agent client
   const mcpVersion = rawRequest.headers.get("Mcp-Protocol-Version");
   if (mcpVersion) upstreamHeaders.set("Mcp-Protocol-Version", mcpVersion);
 
@@ -273,10 +258,16 @@ async function forwardToUpstream(
     });
 
     const contentType = upstreamRes.headers.get("Content-Type") || "";
+    const responseHeaders = new Headers(CORS_HEADERS);
+
+    // Pass through WWW-Authenticate for OAuth 2.1 PKCE discovery (Claude Code / Cursor)
+    const wwwAuth = upstreamRes.headers.get("WWW-Authenticate");
+    if (wwwAuth) {
+      responseHeaders.set("WWW-Authenticate", wwwAuth);
+    }
 
     // If upstream returns SSE / streamable event stream, stream it directly to client
     if (contentType.includes("text/event-stream")) {
-      const responseHeaders = new Headers(CORS_HEADERS);
       responseHeaders.set("Content-Type", "text/event-stream");
       responseHeaders.set("Cache-Control", "no-cache");
       responseHeaders.set("Connection", "keep-alive");
@@ -287,9 +278,28 @@ async function forwardToUpstream(
       });
     }
 
-    // Standard JSON response
-    const data = await upstreamRes.json();
-    return jsonResponse(data, upstreamRes.status);
+    // If empty response (e.g. 401 without body)
+    const text = await upstreamRes.text();
+    if (!text) {
+      return new Response(null, {
+        status: upstreamRes.status,
+        headers: responseHeaders,
+      });
+    }
+
+    try {
+      const data = JSON.parse(text);
+      responseHeaders.set("Content-Type", "application/json; charset=utf-8");
+      return new Response(JSON.stringify(data), {
+        status: upstreamRes.status,
+        headers: responseHeaders,
+      });
+    } catch {
+      return new Response(text, {
+        status: upstreamRes.status,
+        headers: responseHeaders,
+      });
+    }
   } catch (error: any) {
     return jsonResponse(
       {
@@ -308,12 +318,13 @@ async function forwardToUpstream(
 /**
  * Helper to build JSON responses with CORS headers
  */
-function jsonResponse(body: unknown, status = 200): Response {
+function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       ...CORS_HEADERS,
       "Content-Type": "application/json; charset=utf-8",
+      ...headers,
     },
   });
 }
