@@ -1,124 +1,77 @@
 # zernio-mcp-cloudflare
 
-> **Cloudflare Workers MCP Server & Gateway cho Zernio Unified Social Media API**  
-> Tuân thủ chuẩn **Model Context Protocol (MCP)** mới nhất (**Streamable HTTP**, JSON-RPC 2.0) và tương thích **100% Cloudflare Free Tier** (hoàn toàn miễn phí, 0 chi phí duy trì).
+Streamable HTTP proxy in front of the [Zernio](https://zernio.com/agents) MCP server, running as a
+stateless Cloudflare Worker. One endpoint for every agent (Antigravity, Claude Code, Codex, Cursor,
+n8n…), with the Zernio API key kept as a Worker secret instead of in each client's config.
 
-- **Production Endpoint**: `https://api.zerniomcp.workers.dev/mcp`
-- **Health Check**: `https://api.zerniomcp.workers.dev/health`
+- Endpoint: `https://api.zerniomcp.workers.dev/mcp`
+- Health: `https://api.zerniomcp.workers.dev/health`
 
----
+## Cloudflare Free plan
 
-## 🌟 Tính năng nổi bật
+- Plain `fetch` Worker: no Durable Objects, KV, D1 or other paid bindings.
+- ~2.5 KiB gzipped, ~3 ms startup; the Worker only relays I/O, well under the 10 ms CPU limit.
+- Free plan quota: 100,000 requests/day on `*.workers.dev`.
 
-- **Chuẩn MCP mới nhất (Modern Streamable HTTP)**:
-  - 1 Endpoint `POST /mcp` (và `POST /`) xử lý JSON-RPC 2.0 (`initialize`, `tools/list`, `tools/call`, `server/discover`).
-  - Hỗ trợ full stream responses (Server-Sent Events / chunked transfer) cho các agentic AI hiện đại.
-  - Loại bỏ kiến trúc WebSocket nặng nề và SSE 2-endpoint cũ (`Last-Event-ID`).
-- **100% Cloudflare Free Tier Compatible**:
-  - Chạy trên **Stateless Worker (Fetch Handler)** thuần túy.
-  - **Không dùng Durable Objects** (không phát sinh phí $5/tháng của Workers Paid).
-  - Tận dụng hạn mức **100.000 requests/ngày** miễn phí vĩnh viễn của Cloudflare.
-  - CPU execution time siêu thấp (~1-2ms, giới hạn Free Tier là 10ms).
-  - Subdomain chuẩn: `api.zerniomcp.workers.dev`.
-- **Linh hoạt xác thực**:
-  - Hỗ trợ header `x-api-key` (tương thích cấu hình của mrgoonie/zernio-mcp và Claude Desktop / Cursor).
-  - Hỗ trợ header chuẩn `Authorization: Bearer <sk_key>`.
-  - Hỗ trợ secret `ZERNIO_API_KEY` lưu tại Worker (cho agent headless tự động).
-  - Tùy chọn đặt `GATEWAY_TOKEN` bảo vệ endpoint.
+## How requests are authorized
 
----
+The Worker fails closed:
 
-## 📐 Kiến trúc
+| Caller sends | Result |
+|---|---|
+| `x-gateway-token: <GATEWAY_TOKEN>` (or `Authorization: Bearer <GATEWAY_TOKEN>`) | Uses the Worker's `ZERNIO_API_KEY` |
+| Gateway token **and** its own key in `x-api-key` | Uses the caller's key |
+| Nothing, or a wrong gateway token | `401`, no upstream call |
 
-```
-[Agentic AI Clients]
-  (agy, Claude Code, Codex, Cursor, n8n, Python agents)
-         │
-         ▼  POST https://api.zerniomcp.workers.dev/mcp
-┌─────────────────────────────────────────────────────────┐
-│ Cloudflare Workers Edge (100% Free Tier)                │
-│                                                         │
-│  1. CORS & Preflight Check (OPTIONS)                    │
-│  2. Xác thực nội bộ Gateway Token (tùy chọn)            │
-│  3. Xử lý Handshake & Khám phá công cụ (Discovery)     │
-│  4. Nhận x-api-key, Bearer hoặc Secret ZERNIO_API_KEY   │
-│  5. Stream JSON-RPC Request/Response                    │
-└──────────────────────────┬──────────────────────────────┘
-                           │
-                           ▼  Streamable HTTP
-┌─────────────────────────────────────────────────────────┐
-│ Zernio MCP Server (https://mcp.zernio.com/mcp)          │
-│ 496 Tools · 18 Social Media Platforms                   │
-└─────────────────────────────────────────────────────────┘
-```
+- Without `GATEWAY_TOKEN` configured, the Worker never spends its own key; callers must bring their
+  own key via `x-api-key` or `Authorization: Bearer`.
+- Tokens are accepted only in headers, never in the URL, so they stay out of Workers logs.
+- Prefer `x-gateway-token` over `Authorization`: some clients treat `Authorization` as an OAuth slot.
 
----
+## Behaviour
 
-## 🚀 Triển khai & Cấu hình (Deployment)
+- `POST /mcp` only. Every JSON-RPC request (including `initialize`) is relayed to
+  `https://mcp.zernio.com/mcp`, so capabilities, tools and `Mcp-Session-Id` come from upstream.
+- Responses stream back unbuffered (`text/event-stream` or JSON).
+- Notifications get `202 Accepted` immediately and are relayed in the background (`ctx.waitUntil`).
+- Batch requests return `-32600` (JSON-RPC batching was removed from MCP in 2025-06-18).
+- Upstream calls time out after 60 s (`504`); a rejected Zernio key returns `401` with code `-32001`.
 
-### 1. Thiết lập Zernio API Key (Tùy chọn)
-
-Nếu muốn Worker tự động tiêm API key cho mọi agent nội bộ mà không cần truyền key từ client:
+## Deploy
 
 ```bash
+npm install
 npx wrangler secret put ZERNIO_API_KEY
-```
-
-### 2. Deploy lên Cloudflare Workers (Free)
-
-```bash
+openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' | npx wrangler secret put GATEWAY_TOKEN
 npm run deploy
+curl https://api.zerniomcp.workers.dev/health   # requiresGatewayToken: true
 ```
 
-Endpoint hoạt động:
-`https://api.zerniomcp.workers.dev/mcp`
+## Connect agents
 
-Kiểm tra:
-```bash
-curl https://api.zerniomcp.workers.dev/health
-```
-
----
-
-## 🔌 Cấu hình kết nối cho các Agentic AI
-
-### 1. Antigravity (`agy`)
+Replace `<GATEWAY_TOKEN>` with the value you stored. Ready-made snippets are in [`clients/`](clients/).
 
 ```bash
-agy mcp add zernio https://api.zerniomcp.workers.dev/mcp
+# Antigravity
+agy mcp add --header "x-gateway-token: <GATEWAY_TOKEN>" zernio https://api.zerniomcp.workers.dev/mcp
+
+# Claude Code
+claude mcp add --transport http zernio https://api.zerniomcp.workers.dev/mcp -H "x-gateway-token: <GATEWAY_TOKEN>"
 ```
-
-### 2. Claude Code
-
-```bash
-claude mcp add --transport http zernio https://api.zerniomcp.workers.dev/mcp
-```
-
-### 3. OpenAI Codex (`~/.codex/config.toml`)
 
 ```toml
+# Codex: ~/.codex/config.toml
 [mcp_servers.zernio]
 url = "https://api.zerniomcp.workers.dev/mcp"
-enabled = true
-startup_timeout_sec = 10
-tool_timeout_sec = 120
+http_headers = { "x-gateway-token" = "<GATEWAY_TOKEN>" }
 ```
-
-### 4. Cursor / Windsurf (`.cursor/mcp.json`)
 
 ```json
-{
-  "mcpServers": {
-    "zernio": {
-      "url": "https://api.zerniomcp.workers.dev/mcp"
-    }
-  }
-}
+// Cursor: .cursor/mcp.json (keep this file out of git)
+{ "mcpServers": { "zernio": { "url": "https://api.zerniomcp.workers.dev/mcp",
+  "headers": { "x-gateway-token": "<GATEWAY_TOKEN>" } } } }
 ```
 
----
+## License
 
-## 📄 Giấy phép
-
-Mã nguồn được phát hành theo giấy phép [MIT](LICENSE).
-Tác giả: [liamakeup](https://github.com/liamakeup)
+[MIT](LICENSE)

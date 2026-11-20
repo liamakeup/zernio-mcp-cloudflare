@@ -1,7 +1,10 @@
 {
   "mcpServers": {
     "zernio": {
-      "url": "https://api.zerniomcp.workers.dev/mcp"
+      "url": "https://api.zerniomcp.workers.dev/mcp",
+      "headers": {
+        "x-gateway-token": "<GATEWAY_TOKEN>"
+      }
     }
   }
 }

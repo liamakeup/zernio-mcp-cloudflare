@@ -1,16 +1,9 @@
 #!/usr/bin/env bash
-# Connect Antigravity (agy) to your Cloudflare Zernio MCP Server
+# Connect Antigravity (agy) to the Zernio MCP gateway.
+# Usage: GATEWAY_TOKEN=... ./clients/agy-mcp-command.sh
+set -euo pipefail
+: "${GATEWAY_TOKEN:?set GATEWAY_TOKEN first}"
 
-WORKER_URL="https://api.zerniomcp.workers.dev/mcp"
-
-# If public or server-configured ZERNIO_API_KEY:
-agy mcp add zernio "$WORKER_URL"
-
-# If client passes x-api-key:
-# agy mcp add --header "x-api-key: YOUR_ZERNIO_API_KEY" zernio "$WORKER_URL"
-
-# If GATEWAY_TOKEN is enabled:
-# agy mcp add --header "Authorization: Bearer YOUR_GATEWAY_TOKEN" zernio "$WORKER_URL"
-
-# Verify connection:
+agy mcp remove zernio >/dev/null 2>&1 || true
+agy mcp add --header "x-gateway-token: ${GATEWAY_TOKEN}" zernio https://api.zerniomcp.workers.dev/mcp
 agy mcp list

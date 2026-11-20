@@ -1,10 +1,8 @@
-# Add to ~/.codex/config.toml
+# Add to ~/.codex/config.toml (user-level file, never a repo file)
 
 [mcp_servers.zernio]
 url = "https://api.zerniomcp.workers.dev/mcp"
 enabled = true
 startup_timeout_sec = 10
 tool_timeout_sec = 120
-
-# Optional headers (if passing key or gateway token from client):
-# headers = { "x-api-key" = "sk_your_key_here" }
+http_headers = { "x-gateway-token" = "<GATEWAY_TOKEN>" }

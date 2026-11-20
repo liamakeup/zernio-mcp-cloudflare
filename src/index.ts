@@ -1,330 +1,228 @@
 /**
  * zernio-mcp-cloudflare
  *
- * Model Context Protocol (MCP) Server & Gateway for Zernio Social Media API.
- * - Modern MCP Standard: Streamable HTTP (spec 2024-11-05 / 2026 baseline), JSON-RPC 2.0.
- * - 100% Cloudflare Workers Free Tier Compatible:
- *   - Pure stateless Worker (fetch handler)
- *   - Zero Durable Objects (no paid add-on required)
- *   - Fast execution (<5ms CPU time)
- *   - Subdomain ready (*.zerniomcp.workers.dev)
+ * Streamable HTTP proxy in front of the Zernio MCP server, running as a
+ * stateless Cloudflare Worker (Free plan: no Durable Objects, no paid bindings).
+ *
+ * Auth model (fail closed):
+ * - The Worker's own ZERNIO_API_KEY is used only after the caller proves the
+ *   GATEWAY_TOKEN (header `x-gateway-token`, or `Authorization: Bearer <token>`).
+ * - A caller may instead bring its own Zernio key (`x-api-key`, or a Bearer
+ *   value that is not the gateway token). When GATEWAY_TOKEN is set, the
+ *   gateway token is still required.
+ * - Without GATEWAY_TOKEN the Worker never spends its own key.
  */
 
 export interface Env {
-  /**
-   * Upstream Zernio API Key.
-   * If set on the Worker, client agents do not need to provide their own key.
-   */
+  /** Zernio API key spent on behalf of callers that pass the gateway token. */
   ZERNIO_API_KEY?: string;
-
-  /**
-   * Optional secret token to protect your Cloudflare Worker endpoint.
-   * If set, clients must pass `Authorization: Bearer <GATEWAY_TOKEN>` or `x-gateway-token: <GATEWAY_TOKEN>`.
-   */
+  /** Shared secret that callers must present before the Worker key is used. */
   GATEWAY_TOKEN?: string;
-
-  /**
-   * Upstream Zernio MCP Server URL.
-   * Defaults to https://mcp.zernio.com/mcp
-   */
+  /** Upstream Zernio MCP endpoint. */
   UPSTREAM_MCP_URL?: string;
 }
 
 const DEFAULT_UPSTREAM = "https://mcp.zernio.com/mcp";
+const MCP_PATH = "/mcp";
+const UPSTREAM_TIMEOUT_MS = 60_000;
 const SERVER_NAME = "zernio-mcp-cloudflare";
-const SERVER_VERSION = "1.0.0";
-const SUPPORTED_PROTOCOL_VERSIONS = ["2024-11-05", "2026-07-28"];
+const SERVER_VERSION = "1.1.0";
 
-/**
- * Common CORS headers for web, desktop & CLI agent clients.
- */
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers":
-    "Content-Type, x-api-key, x-gateway-token, Authorization, Mcp-Protocol-Version, Mcp-Method, Mcp-Name, mcp-session-id, X-Requested-With",
-  "Access-Control-Expose-Headers": "WWW-Authenticate, Mcp-Protocol-Version, Mcp-Session-Id",
+    "Content-Type, Accept, Authorization, x-api-key, x-gateway-token, Mcp-Protocol-Version, Mcp-Method, Mcp-Name, Mcp-Session-Id",
+  "Access-Control-Expose-Headers": "Mcp-Protocol-Version, Mcp-Session-Id",
   "Access-Control-Max-Age": "86400",
 };
+
+/** Request headers the MCP transport defines and the upstream may rely on. */
+const FORWARDED_REQUEST_HEADERS = ["Mcp-Protocol-Version", "Mcp-Method", "Mcp-Name", "Mcp-Session-Id"];
+/** Upstream response headers worth returning to the client. */
+const FORWARDED_RESPONSE_HEADERS = ["Content-Type", "Mcp-Session-Id", "Mcp-Protocol-Version"];
+
+type JsonRpcId = string | number | null;
+type AuthResult = { ok: true; zernioKey: string } | { ok: false; message: string };
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    // 1. CORS Preflight
     if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: CORS_HEADERS,
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
+    if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
+      return json({
+        status: "healthy",
+        server: SERVER_NAME,
+        version: SERVER_VERSION,
+        transport: "Streamable HTTP (JSON-RPC 2.0)",
+        requiresGatewayToken: Boolean(env.GATEWAY_TOKEN),
+        hasServerKey: Boolean(env.ZERNIO_API_KEY),
+        endpoint: `${url.origin}${MCP_PATH}`,
       });
     }
 
-    // 2. Health check & info (GET / or GET /health)
-    if (request.method === "GET") {
-      if (url.pathname === "/" || url.pathname === "/health") {
-        return jsonResponse({
-          status: "healthy",
-          server: SERVER_NAME,
-          version: SERVER_VERSION,
-          mcpProtocol: "Streamable HTTP (JSON-RPC 2.0)",
-          supportedVersions: SUPPORTED_PROTOCOL_VERSIONS,
-          cloudflareTier: "100% Free Tier (Stateless Worker)",
-          hasServerKey: Boolean(env.ZERNIO_API_KEY),
-          requiresGatewayToken: Boolean(env.GATEWAY_TOKEN),
-          upstream: env.UPSTREAM_MCP_URL || DEFAULT_UPSTREAM,
-          endpoints: {
-            mcp: `${url.origin}/mcp`,
-            root: `${url.origin}/`,
-          },
-        });
-      }
-      return new Response("Not Found", { status: 404, headers: CORS_HEADERS });
+    if (url.pathname !== MCP_PATH) {
+      return json({ error: `Not found. Send MCP requests to POST ${MCP_PATH}` }, 404);
     }
 
-    // 3. Only POST is accepted for MCP requests
     if (request.method !== "POST") {
       return new Response("Method Not Allowed", {
         status: 405,
-        headers: { ...CORS_HEADERS, Allow: "GET, POST, OPTIONS" },
+        headers: { ...CORS_HEADERS, Allow: "POST, OPTIONS" },
       });
     }
 
-    // 4. Validate Gateway Token if configured by owner
-    if (env.GATEWAY_TOKEN) {
-      const authHeader = request.headers.get("Authorization");
-      const customGatewayHeader = request.headers.get("x-gateway-token");
-      const queryToken = url.searchParams.get("token");
-
-      let clientGatewayToken = customGatewayHeader || queryToken;
-      if (!clientGatewayToken && authHeader?.startsWith("Bearer ")) {
-        const tokenCandidate = authHeader.substring(7).trim();
-        if (tokenCandidate === env.GATEWAY_TOKEN) {
-          clientGatewayToken = tokenCandidate;
-        }
-      }
-
-      if (clientGatewayToken !== env.GATEWAY_TOKEN) {
-        return jsonResponse(
-          {
-            jsonrpc: "2.0",
-            error: {
-              code: -32001,
-              message: "Unauthorized: Invalid or missing Gateway token",
-            },
-            id: null,
-          },
-          401
-        );
-      }
+    const auth = await authorize(request, env);
+    if (!auth.ok) {
+      return rpcError(null, -32001, auth.message, 401);
     }
 
-    // 5. Resolve Zernio API Key or Token
-    const clientXApiKey = request.headers.get("x-api-key");
-    const clientAuth = request.headers.get("Authorization");
-    const clientBearer = clientAuth?.startsWith("Bearer ")
-      ? clientAuth.substring(7).trim()
-      : null;
-
-    const resolvedApiKey = clientXApiKey || clientBearer || env.ZERNIO_API_KEY;
-
-    // 6. Parse JSON-RPC Payload
-    let payload: any;
+    let payload: unknown;
     try {
       payload = await request.json();
     } catch {
-      return jsonResponse(
-        {
-          jsonrpc: "2.0",
-          error: {
-            code: -32700,
-            message: "Parse error: Invalid JSON in request body",
-          },
-          id: null,
-        },
-        400
-      );
+      return rpcError(null, -32700, "Parse error: request body is not valid JSON", 400);
     }
 
-    // 7. Handle Batch or Single request
+    // JSON-RPC batching was removed from MCP in the 2025-06-18 revision.
     if (Array.isArray(payload)) {
-      const results = await Promise.all(
-        payload.map((reqItem) => handleJsonRpcRequest(reqItem, request, resolvedApiKey, env))
-      );
-      return jsonResponse(results);
+      return rpcError(null, -32600, "Invalid Request: batch requests are not supported", 400);
     }
 
-    return await handleJsonRpcRequest(payload, request, resolvedApiKey, env);
+    if (!isJsonRpcMessage(payload)) {
+      return rpcError(null, -32600, "Invalid Request: expected a JSON-RPC 2.0 object", 400);
+    }
+
+    // Notifications and responses carry no id; the transport answers 202 at once.
+    if (!("id" in payload) || payload.id === undefined) {
+      ctx.waitUntil(
+        forwardToUpstream(payload, request, auth.zernioKey, env)
+          .then((res) => res.body?.cancel())
+          .catch(() => undefined)
+      );
+      return new Response(null, { status: 202, headers: CORS_HEADERS });
+    }
+
+    return forwardToUpstream(payload, request, auth.zernioKey, env);
   },
 };
 
-/**
- * Handle individual JSON-RPC 2.0 message
- */
-async function handleJsonRpcRequest(
-  rpc: any,
-  rawRequest: Request,
-  apiKey: string | undefined,
-  env: Env
-): Promise<Response> {
-  const method = rpc?.method;
-  const id = rpc?.id ?? null;
+/** Decide which Zernio key a request may use, failing closed. */
+async function authorize(request: Request, env: Env): Promise<AuthResult> {
+  const gatewayHeader = request.headers.get("x-gateway-token")?.trim() || null;
+  const bearer = parseBearer(request.headers.get("Authorization"));
+  const clientKey = request.headers.get("x-api-key")?.trim() || null;
 
-  // Notification (no id)
-  if (method === "notifications/initialized") {
-    forwardToUpstream(rpc, rawRequest, apiKey, env).catch(() => {});
-    return new Response(null, { status: 204, headers: CORS_HEADERS });
+  let gatewayOk = false;
+  if (env.GATEWAY_TOKEN) {
+    const candidate = gatewayHeader ?? bearer;
+    gatewayOk = candidate !== null && (await safeEqual(candidate, env.GATEWAY_TOKEN));
+    if (!gatewayOk) {
+      return { ok: false, message: "Unauthorized: missing or invalid gateway token" };
+    }
   }
 
-  // Ping handler
-  if (method === "ping") {
-    return jsonResponse({
-      jsonrpc: "2.0",
-      id,
-      result: {},
-    });
+  // A Bearer value that proved the gateway token is never forwarded as a Zernio key.
+  const bearerWasGatewayToken = gatewayOk && gatewayHeader === null;
+  const ownKey = clientKey ?? (bearerWasGatewayToken ? null : bearer);
+  if (ownKey) {
+    return { ok: true, zernioKey: ownKey };
   }
 
-  // MCP Initialize Handshake
-  if (method === "initialize") {
-    const clientProtocol = rpc?.params?.protocolVersion || "2024-11-05";
-    return jsonResponse({
-      jsonrpc: "2.0",
-      id,
-      result: {
-        protocolVersion: clientProtocol,
-        capabilities: {
-          tools: { listChanged: true },
-          resources: { subscribe: false, listChanged: true },
-          prompts: { listChanged: true },
-          logging: {},
-        },
-        serverInfo: {
-          name: SERVER_NAME,
-          version: SERVER_VERSION,
-        },
-        instructions:
-          "Zernio Social Media MCP Gateway on Cloudflare Workers. 100% Free Tier compatible. Connects AI agents to Zernio API across 18 social media platforms.",
-      },
-    });
+  if (gatewayOk && env.ZERNIO_API_KEY) {
+    return { ok: true, zernioKey: env.ZERNIO_API_KEY };
   }
 
-  // Forward all tool/resource/prompt requests to Upstream Zernio MCP Server
-  return await forwardToUpstream(rpc, rawRequest, apiKey, env);
+  return {
+    ok: false,
+    message: gatewayOk
+      ? "Unauthorized: gateway has no Zernio API key; send one via x-api-key"
+      : "Unauthorized: send a Zernio API key via x-api-key or Authorization: Bearer",
+  };
 }
 
-/**
- * Forward JSON-RPC call to upstream Zernio MCP Server with streaming & OAuth challenge passthrough
- */
 async function forwardToUpstream(
-  rpc: any,
-  rawRequest: Request,
-  apiKey: string | undefined,
+  rpc: Record<string, unknown>,
+  request: Request,
+  zernioKey: string,
   env: Env
 ): Promise<Response> {
-  const upstreamUrl = env.UPSTREAM_MCP_URL || DEFAULT_UPSTREAM;
-  const upstreamHeaders = new Headers();
-
-  upstreamHeaders.set("Content-Type", "application/json");
-  upstreamHeaders.set("Accept", "application/json, text/event-stream");
-
-  if (apiKey) {
-    upstreamHeaders.set("Authorization", `Bearer ${apiKey}`);
-  } else {
-    // If client supplied any raw Authorization header, forward it
-    const clientAuth = rawRequest.headers.get("Authorization");
-    if (clientAuth) {
-      upstreamHeaders.set("Authorization", clientAuth);
-    }
+  const id = (rpc.id as JsonRpcId | undefined) ?? null;
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+    Authorization: `Bearer ${zernioKey}`,
+  });
+  for (const name of FORWARDED_REQUEST_HEADERS) {
+    const value = request.headers.get(name);
+    if (value) headers.set(name, value);
   }
 
-  // Forward MCP metadata headers if provided by agent client
-  const mcpVersion = rawRequest.headers.get("Mcp-Protocol-Version");
-  if (mcpVersion) upstreamHeaders.set("Mcp-Protocol-Version", mcpVersion);
-
-  const mcpMethod = rawRequest.headers.get("Mcp-Method");
-  if (mcpMethod) upstreamHeaders.set("Mcp-Method", mcpMethod);
-
-  const mcpName = rawRequest.headers.get("Mcp-Name");
-  if (mcpName) upstreamHeaders.set("Mcp-Name", mcpName);
-
-  const mcpSessionId = rawRequest.headers.get("mcp-session-id");
-  if (mcpSessionId) upstreamHeaders.set("mcp-session-id", mcpSessionId);
-
+  let upstream: Response;
   try {
-    const upstreamRes = await fetch(upstreamUrl, {
+    upstream = await fetch(env.UPSTREAM_MCP_URL || DEFAULT_UPSTREAM, {
       method: "POST",
-      headers: upstreamHeaders,
+      headers,
       body: JSON.stringify(rpc),
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
-
-    const contentType = upstreamRes.headers.get("Content-Type") || "";
-    const responseHeaders = new Headers(CORS_HEADERS);
-
-    // Pass through WWW-Authenticate for OAuth 2.1 PKCE discovery (Claude Code / Cursor)
-    const wwwAuth = upstreamRes.headers.get("WWW-Authenticate");
-    if (wwwAuth) {
-      responseHeaders.set("WWW-Authenticate", wwwAuth);
-    }
-
-    // If upstream returns SSE / streamable event stream, stream it directly to client
-    if (contentType.includes("text/event-stream")) {
-      responseHeaders.set("Content-Type", "text/event-stream");
-      responseHeaders.set("Cache-Control", "no-cache");
-      responseHeaders.set("Connection", "keep-alive");
-
-      return new Response(upstreamRes.body, {
-        status: upstreamRes.status,
-        headers: responseHeaders,
-      });
-    }
-
-    // If empty response (e.g. 401 without body)
-    const text = await upstreamRes.text();
-    if (!text) {
-      return new Response(null, {
-        status: upstreamRes.status,
-        headers: responseHeaders,
-      });
-    }
-
-    try {
-      const data = JSON.parse(text);
-      responseHeaders.set("Content-Type", "application/json; charset=utf-8");
-      return new Response(JSON.stringify(data), {
-        status: upstreamRes.status,
-        headers: responseHeaders,
-      });
-    } catch {
-      return new Response(text, {
-        status: upstreamRes.status,
-        headers: responseHeaders,
-      });
-    }
-  } catch (error: any) {
-    return jsonResponse(
-      {
-        jsonrpc: "2.0",
-        id: rpc?.id ?? null,
-        error: {
-          code: -32000,
-          message: `Upstream Zernio MCP error: ${error?.message || "Connection failed"}`,
-        },
-      },
-      502
-    );
+  } catch (err) {
+    const timedOut = err instanceof Error && err.name === "TimeoutError";
+    return timedOut
+      ? rpcError(id, -32000, `Upstream Zernio MCP timed out after ${UPSTREAM_TIMEOUT_MS / 1000}s`, 504)
+      : rpcError(id, -32000, "Upstream Zernio MCP is unreachable", 502);
   }
+
+  // Do not relay the upstream OAuth challenge: it names mcp.zernio.com, which
+  // clients reject as a resource mismatch for this gateway.
+  if (upstream.status === 401 || upstream.status === 403) {
+    await upstream.body?.cancel();
+    return rpcError(id, -32001, "Zernio rejected the API key", upstream.status);
+  }
+
+  const out = new Headers(CORS_HEADERS);
+  for (const name of FORWARDED_RESPONSE_HEADERS) {
+    const value = upstream.headers.get(name);
+    if (value) out.set(name, value);
+  }
+  if ((upstream.headers.get("Content-Type") || "").includes("text/event-stream")) {
+    out.set("Cache-Control", "no-cache");
+    out.set("X-Accel-Buffering", "no");
+  }
+
+  return new Response(upstream.body, { status: upstream.status, headers: out });
 }
 
-/**
- * Helper to build JSON responses with CORS headers
- */
-function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
+function parseBearer(header: string | null): string | null {
+  const match = header?.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() || null : null;
+}
+
+/** Constant-time comparison; hashing first makes both inputs the same length. */
+async function safeEqual(a: string, b: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const [ha, hb] = await Promise.all([
+    crypto.subtle.digest("SHA-256", enc.encode(a)),
+    crypto.subtle.digest("SHA-256", enc.encode(b)),
+  ]);
+  return crypto.subtle.timingSafeEqual(ha, hb);
+}
+
+function isJsonRpcMessage(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && (value as Record<string, unknown>).jsonrpc === "2.0";
+}
+
+function rpcError(id: JsonRpcId, code: number, message: string, status: number): Response {
+  return json({ jsonrpc: "2.0", id, error: { code, message } }, status);
+}
+
+function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: {
-      ...CORS_HEADERS,
-      "Content-Type": "application/json; charset=utf-8",
-      ...headers,
-    },
+    headers: { ...CORS_HEADERS, "Content-Type": "application/json; charset=utf-8" },
   });
 }
