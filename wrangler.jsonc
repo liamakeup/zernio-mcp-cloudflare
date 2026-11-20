@@ -1,0 +1,20 @@
+/**
+ * Cloudflare Workers configuration for zernio-mcp-cloudflare
+ * 100% compatible with Cloudflare Workers Free Tier:
+ * - Pure stateless Worker (fetch handler)
+ * - Zero Durable Objects
+ * - Zero paid bindings
+ * - Subdomain: *.workers.dev
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "zernio-mcp-cloudflare",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "a39fdcba95ed984e82b2699ff60f6ff5",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  }
+}

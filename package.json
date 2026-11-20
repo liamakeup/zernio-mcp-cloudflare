@@ -1,0 +1,27 @@
+{
+  "name": "zernio-mcp-cloudflare",
+  "version": "1.0.0",
+  "description": "Cloudflare Workers MCP Server & Gateway for Zernio Social Media API - 100% Free Tier Compatible",
+  "main": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "zernio",
+    "cloudflare-workers",
+    "social-media",
+    "ai-agents"
+  ],
+  "author": "liamakeup",
+  "license": "MIT",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261120.1",
+    "typescript": "^5.7.3",
+    "wrangler": "^4.165.0"
+  }
+}
