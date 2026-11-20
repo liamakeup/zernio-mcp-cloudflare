@@ -1,11 +1,24 @@
-# zernio-mcp-cloudflare
+# zernio-mcp-cloudflare (`liamakeup-mcp-portal` v2.0)
 
-Streamable HTTP proxy in front of the [Zernio](https://zernio.com/agents) MCP server, running as a
+Multi-Server MCP Portal & Multi-Tool Batch Executor in front of the [Zernio](https://zernio.com/agents) MCP server (and any additional upstream MCP servers), running as a
 stateless Cloudflare Worker. One endpoint for every agent (Antigravity, Claude Code, Codex, Cursor,
-n8n…), with the Zernio API key kept as a Worker secret instead of in each client's config.
+Cloudflare Agents, n8n…), with upstream API keys kept as Worker secrets instead of in each client's config.
 
-- Endpoint: `https://api.liamakeup.workers.dev/mcp`
+- Endpoint (Full Mode): `https://api.liamakeup.workers.dev/mcp`
+- Endpoint (Compact Mode — ~90% fewer tool tokens): `https://api.liamakeup.workers.dev/mcp?mode=compact`
 - Health: `https://api.liamakeup.workers.dev/health`
+
+## Portal Capabilities (v2.0)
+
+1. **Multi-Server Aggregation (`UPSTREAM_SERVERS`):**
+   - Primary server `zernio` (`https://mcp.zernio.com/mcp`) exposes unprefixed tool names (and also accepts `zernio__<tool>`) for 100% backward compatibility.
+   - Additional upstream MCP servers configured in `UPSTREAM_SERVERS` JSON (`[{"id":"crm","name":"CRM MCP","url":"https://...","token":"..."}]`) have their tools exposed as `<id>__<toolName>` in `tools/list` and routed automatically on `tools/call`.
+2. **Multi-Tool Batch & Chain Execution (`portal_batch_call`):**
+   - Execute up to 10 MCP tool calls in a single round-trip across one or multiple servers.
+   - `mode: "parallel"` runs all calls concurrently (`Promise.all`).
+   - `mode: "sequential"` runs calls in order and interpolates previous step JSON outputs via `{{$steps.0.field.path}}` (with optional `stopOnError: true`).
+3. **Compact Discovery Mode (`?mode=compact` or header `x-portal-mode: compact`):**
+   - Filters `tools/list` down to `zernio_overview`, `search_tools`, `call_tool`, `portal_list_servers`, and `portal_batch_call`.
 
 ## Cloudflare Free plan
 

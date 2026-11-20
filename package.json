@@ -1,13 +1,14 @@
 {
   "name": "zernio-mcp-cloudflare",
-  "version": "1.0.0",
-  "description": "Cloudflare Workers MCP Server & Gateway for Zernio Social Media API - 100% Free Tier Compatible",
+  "version": "2.0.0",
+  "description": "Cloudflare Workers Multi-Server MCP Portal & Batch Executor for Lia Makeup - 100% Free Tier Compatible",
   "main": "src/index.ts",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
   },
   "keywords": [
     "mcp",
