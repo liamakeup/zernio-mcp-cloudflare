@@ -35,7 +35,7 @@ The Worker fails closed:
 - Responses stream back unbuffered (`text/event-stream` or JSON).
 - Notifications get `202 Accepted` immediately and are relayed in the background (`ctx.waitUntil`).
 - Batch requests return `-32600` (JSON-RPC batching was removed from MCP in 2025-06-18).
-- Upstream calls time out after 60 s (`504`); a rejected Zernio key returns `401` with code `-32001`.
+- Upstream calls that send no response headers within 60 s return `504`; streams already under way are not cut; a rejected Zernio key returns the upstream `401`/`403` with code `-32001`.
 
 ## Deploy
 

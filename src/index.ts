@@ -126,9 +126,9 @@ async function authorize(request: Request, env: Env): Promise<AuthResult> {
     }
   }
 
-  // A Bearer value that proved the gateway token is never forwarded as a Zernio key.
-  const bearerWasGatewayToken = gatewayOk && gatewayHeader === null;
-  const ownKey = clientKey ?? (bearerWasGatewayToken ? null : bearer);
+  // The gateway token is never forwarded as a Zernio key, whichever header carried it.
+  let ownKey: string | null = clientKey ?? bearer;
+  if (ownKey && env.GATEWAY_TOKEN && (await safeEqual(ownKey, env.GATEWAY_TOKEN))) ownKey = null;
   if (ownKey) {
     return { ok: true, zernioKey: ownKey };
   }
@@ -162,19 +162,24 @@ async function forwardToUpstream(
     if (value) headers.set(name, value);
   }
 
+  // The timeout bounds the wait for response headers only; once upstream starts
+  // answering, the timer is cleared so long SSE tool-call streams are not cut.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
   let upstream: Response;
   try {
     upstream = await fetch(env.UPSTREAM_MCP_URL || DEFAULT_UPSTREAM, {
       method: "POST",
       headers,
       body: JSON.stringify(rpc),
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      signal: controller.signal,
     });
-  } catch (err) {
-    const timedOut = err instanceof Error && err.name === "TimeoutError";
-    return timedOut
+  } catch {
+    return controller.signal.aborted
       ? rpcError(id, -32000, `Upstream Zernio MCP timed out after ${UPSTREAM_TIMEOUT_MS / 1000}s`, 504)
       : rpcError(id, -32000, "Upstream Zernio MCP is unreachable", 502);
+  } finally {
+    clearTimeout(timer);
   }
 
   // Do not relay the upstream OAuth challenge: it names mcp.zernio.com, which
