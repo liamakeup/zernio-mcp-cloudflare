@@ -1,14 +1,15 @@
 /**
  * Cloudflare Workers configuration for zernio-mcp-cloudflare
+ * URL: https://api.zernio-mcp.workers.dev/mcp
  * 100% compatible with Cloudflare Workers Free Tier:
  * - Pure stateless Worker (fetch handler)
  * - Zero Durable Objects
  * - Zero paid bindings
- * - Subdomain: *.workers.dev
+ * - Subdomain: api.zernio-mcp.workers.dev
  */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "zernio-mcp-cloudflare",
+  "name": "api",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-20",
   "compatibility_flags": ["nodejs_compat"],

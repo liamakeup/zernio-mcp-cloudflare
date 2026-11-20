@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "zernio": {
-      "url": "https://zernio-mcp-cloudflare.<your-subdomain>.workers.dev/mcp"
+      "url": "https://api.zernio-mcp.workers.dev/mcp"
     }
   }
 }

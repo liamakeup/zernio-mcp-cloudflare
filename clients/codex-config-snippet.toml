@@ -1,10 +1,10 @@
 # Add to ~/.codex/config.toml
 
 [mcp_servers.zernio]
-url = "https://zernio-mcp-cloudflare.<your-subdomain>.workers.dev/mcp"
+url = "https://api.zernio-mcp.workers.dev/mcp"
 enabled = true
 startup_timeout_sec = 10
 tool_timeout_sec = 120
 
-# If GATEWAY_TOKEN is enabled, add headers:
-# headers = { "Authorization" = "Bearer YOUR_GATEWAY_TOKEN" }
+# Optional headers (if passing key or gateway token from client):
+# headers = { "x-api-key" = "sk_your_key_here" }
